@@ -1,0 +1,16 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/*.pyc
+backend/.env
+
+# ChromaDB data (generated, not committed)
+data/chroma/
+
+# Next.js
+frontend/.next/
+frontend/node_modules/
+frontend/.env.local
+
+# macOS
+.DS_Store
