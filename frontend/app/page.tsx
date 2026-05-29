@@ -1,8 +1,15 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+interface StatusResponse {
+  status: string;
+  indexed: boolean;
+  threads_count: number;
+  needs_indexing: boolean;
+}
 
 interface ThreadMessage {
   sender: string;
@@ -125,8 +132,29 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [ingestMsg, setIngestMsg] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [statusChecked, setStatusChecked] = useState(false);
 
   const terms = useMemo(() => extractTerms(askedQuestion), [askedQuestion]);
+  const needsIndexing = status?.needs_indexing ?? true;
+
+  useEffect(() => {
+    checkStatus();
+  }, []);
+
+  async function checkStatus() {
+    try {
+      const res = await fetch(`${API_URL}/status`);
+      if (res.ok) {
+        const data = await res.json();
+        setStatus(data);
+      }
+    } catch (err) {
+      console.error("Failed to check status:", err);
+    } finally {
+      setStatusChecked(true);
+    }
+  }
 
   function toggleExpanded(idx: number) {
     setExpanded((prev) => {
@@ -177,10 +205,21 @@ export default function Home() {
     setIngestMsg(null);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/ingest`, { method: "POST" });
+      const res = await fetch(`${API_URL}/ingest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: false }),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Ingest failed");
-      setIngestMsg(`Indexed ${data.threads_ingested} threads.`);
+      
+      if (data.reindexed) {
+        setIngestMsg(`✓ Indexed ${data.threads_count} threads successfully.`);
+      } else {
+        setIngestMsg(`✓ Data is up to date (${data.threads_count} threads). No reindexing needed.`);
+      }
+      
+      await checkStatus();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -197,7 +236,7 @@ export default function Home() {
           <img
             src="/assets/spendbase-logo.png"
             alt="Spendbase"
-            className="h-7 w-auto opacity-90"
+            className="h-20 w-auto opacity-90"
           />
         </div>
 
@@ -209,7 +248,7 @@ export default function Home() {
             disabled={ingesting}
             className="smallcaps transition hover:text-(--color-ink) disabled:opacity-50"
           >
-            {ingesting ? "Indexing…" : "↻ Reindex"}
+            {ingesting ? "Indexing…" : needsIndexing ? "Index Data" : "↻ Reindex"}
           </button>
         </div>
 
@@ -223,6 +262,15 @@ export default function Home() {
             answered in kind.
           </p>
         </header>
+
+        {statusChecked && needsIndexing && !ingestMsg && (
+          <div className="mb-6 rounded-lg border border-(--color-accent)/30 bg-(--color-accent)/5 px-5 py-4 fade-up">
+            <p className="serif text-[15px] leading-snug text-(--color-ink)">
+              <span className="font-semibold">Welcome!</span> Before you can search your emails, 
+              you need to index your data. Click <span className="font-semibold">&ldquo;Index Data&rdquo;</span> above to get started.
+            </p>
+          </div>
+        )}
 
         {ingestMsg && (
           <p className="mono mb-4 text-[11px] text-(--color-accent) fade-up">
@@ -239,12 +287,13 @@ export default function Home() {
                 type="text"
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
-                placeholder="On what subject?"
-                className="serif w-full bg-transparent py-2 text-[22px] italic text-(--color-ink) placeholder-(--color-muted)/70 focus:outline-none"
+                placeholder={needsIndexing ? "Index data first..." : "On what subject?"}
+                disabled={needsIndexing}
+                className="serif w-full bg-transparent py-2 text-[22px] italic text-(--color-ink) placeholder-(--color-muted)/70 focus:outline-none disabled:opacity-50"
               />
               <button
                 type="submit"
-                disabled={loading || !question.trim()}
+                disabled={loading || !question.trim() || needsIndexing}
                 className="smallcaps mb-1 shrink-0 transition hover:text-(--color-accent) disabled:opacity-40"
               >
                 {loading ? "Reading…" : "Submit →"}
@@ -253,7 +302,7 @@ export default function Home() {
           </form>
         </section>
 
-        {!result && !loading && !error && (
+        {!result && !loading && !error && !needsIndexing && (
           <div className="mt-6 fade-up">
             <p className="smallcaps mb-2">Suggested</p>
             <ul className="space-y-1.5">
