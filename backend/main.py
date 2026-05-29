@@ -14,7 +14,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 from ingest import ingest
-from retriever import retrieve
+from retriever import collection_exists, get_collection_stats, retrieve
 
 app = FastAPI(title="Email Knowledge Base")
 
@@ -70,11 +70,18 @@ class AskResponse(BaseModel):
     sources: list[Source]
 
 
+class IngestRequest(BaseModel):
+    force: bool = False
+
+
 @app.post("/ingest")
-def run_ingest():
+def run_ingest(req: IngestRequest = IngestRequest()):
     try:
-        count = ingest(MBOX_PATH)
-        return {"status": "ok", "threads_ingested": count}
+        result = ingest(MBOX_PATH, force=req.force)
+        return {
+            "status": "ok",
+            **result
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -84,10 +91,17 @@ def ask(req: AskRequest):
     if not OPENROUTER_API_KEY:
         raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not set")
 
+    # Check if collection exists first
+    if not collection_exists():
+        raise HTTPException(
+            status_code=404, 
+            detail="No email data found. Please index your data first by clicking 'Index Data'."
+        )
+
     try:
         threads = retrieve(req.question, n_results=req.n_results)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="No email data found. Run /ingest first.")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
     if not threads:
         return AskResponse(
@@ -148,6 +162,18 @@ def ask(req: AskRequest):
         )
 
     return AskResponse(answer=answer, sources=sources)
+
+
+@app.get("/status")
+def status():
+    """Check if data is indexed and get collection stats."""
+    stats = get_collection_stats()
+    return {
+        "status": "ok",
+        "indexed": stats["exists"],
+        "threads_count": stats["count"],
+        "needs_indexing": not stats["exists"] or stats["count"] == 0,
+    }
 
 
 @app.get("/health")

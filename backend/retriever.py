@@ -24,14 +24,68 @@ def _get_model() -> SentenceTransformer:
     return _model
 
 
-def _get_collection():
-    global _client, _collection
-    if _collection is None:
+def _get_client() -> chromadb.PersistentClient:
+    global _client
+    if _client is None:
         _client = chromadb.PersistentClient(
             path=CHROMA_DATA_DIR, settings=Settings(anonymized_telemetry=False)
         )
-        _collection = _client.get_collection(COLLECTION_NAME)
+    return _client
+
+
+def _get_collection():
+    global _collection
+    client = _get_client()
+    try:
+        _collection = client.get_collection(COLLECTION_NAME)
+    except Exception:
+        raise ValueError("Collection does not exist. Please ingest data first.")
     return _collection
+
+
+def reset_collection_cache():
+    """Reset cached collection reference (e.g., after reindexing)."""
+    global _collection
+    _collection = None
+
+
+def collection_exists() -> bool:
+    """Check if the collection exists in ChromaDB."""
+    try:
+        client = _get_client()
+        collections = client.list_collections()
+        return any(c.name == COLLECTION_NAME for c in collections)
+    except Exception:
+        return False
+
+
+def get_collection_stats() -> dict:
+    """Get collection statistics including count and checksum of data."""
+    try:
+        collection = _get_collection()
+        count = collection.count()
+        
+        # Get a sample of documents to create a checksum
+        if count > 0:
+            sample = collection.get(limit=min(10, count))
+            # Create a simple checksum from first few document IDs and their content
+            checksum_data = str(sorted(sample["ids"])) + str(count)
+            import hashlib
+            checksum = hashlib.md5(checksum_data.encode()).hexdigest()
+        else:
+            checksum = ""
+            
+        return {
+            "exists": True,
+            "count": count,
+            "checksum": checksum,
+        }
+    except ValueError:
+        return {
+            "exists": False,
+            "count": 0,
+            "checksum": "",
+        }
 
 
 MIN_RELEVANCE = 0.30  # cosine similarity floor for "related" results

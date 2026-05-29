@@ -61,6 +61,7 @@ def test_ask_returns_answer_and_sources(client, monkeypatch):
             "score": 0.87,
         }
     ]
+    monkeypatch.setattr(main, "collection_exists", lambda: True)
     monkeypatch.setattr(main, "retrieve", lambda q, n_results: fake_threads)
     monkeypatch.setattr(main, "get_llm", lambda: _fake_llm("The project kicks off next week."))
 
@@ -79,6 +80,7 @@ def test_ask_returns_answer_and_sources(client, monkeypatch):
 
 
 def test_ask_empty_when_no_relevant_threads(client, monkeypatch):
+    monkeypatch.setattr(main, "collection_exists", lambda: True)
     monkeypatch.setattr(main, "retrieve", lambda q, n_results: [])
     # LLM should not be called — but provide a stub anyway just in case.
     monkeypatch.setattr(main, "get_llm", lambda: _fake_llm("should not be used"))
@@ -91,13 +93,10 @@ def test_ask_empty_when_no_relevant_threads(client, monkeypatch):
 
 
 def test_ask_404_when_collection_missing(client, monkeypatch):
-    def boom(*_args, **_kwargs):
-        raise ValueError("collection not found")
-
-    monkeypatch.setattr(main, "retrieve", boom)
+    monkeypatch.setattr(main, "collection_exists", lambda: False)
     r = client.post("/ask", json={"question": "X"})
     assert r.status_code == 404
-    assert "ingest" in r.json()["detail"].lower()
+    assert "index" in r.json()["detail"].lower()
 
 
 def test_ask_500_when_api_key_missing(monkeypatch):
@@ -123,6 +122,7 @@ def test_ask_502_when_llm_fails(client, monkeypatch):
             "score": 0.5,
         }
     ]
+    monkeypatch.setattr(main, "collection_exists", lambda: True)
     monkeypatch.setattr(main, "retrieve", lambda q, n_results: fake_threads)
 
     class _Boom:
@@ -140,17 +140,44 @@ def test_ask_502_when_llm_fails(client, monkeypatch):
 
 
 def test_ingest_endpoint_invokes_ingest(client, monkeypatch):
-    monkeypatch.setattr(main, "ingest", lambda path: 7)
-    r = client.post("/ingest")
+    monkeypatch.setattr(
+        main,
+        "ingest",
+        lambda path, force: {
+            "reindexed": True,
+            "threads_count": 7,
+            "message": "Successfully indexed 7 threads",
+            "checksum": "abc123",
+        },
+    )
+    r = client.post("/ingest", json={"force": False})
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "threads_ingested": 7}
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["reindexed"] is True
+    assert body["threads_count"] == 7
 
 
 def test_ingest_endpoint_surfaces_errors(client, monkeypatch):
-    def boom(_path):
+    def boom(_path, force):
         raise RuntimeError("mbox missing")
 
     monkeypatch.setattr(main, "ingest", boom)
-    r = client.post("/ingest")
+    r = client.post("/ingest", json={"force": False})
     assert r.status_code == 500
     assert "mbox missing" in r.json()["detail"]
+
+
+def test_status_endpoint(client, monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "get_collection_stats",
+        lambda: {"exists": True, "count": 10, "checksum": "xyz"},
+    )
+    r = client.get("/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["indexed"] is True
+    assert body["threads_count"] == 10
+    assert body["needs_indexing"] is False

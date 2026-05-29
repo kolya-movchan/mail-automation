@@ -1,5 +1,6 @@
 """Parse .mbox file, embed each email thread, and store in ChromaDB."""
 
+import hashlib
 import json
 import mailbox
 import os
@@ -143,7 +144,27 @@ def group_into_threads(emails: list[dict]) -> list[dict]:
     return threads
 
 
-def ingest(mbox_path: str = MBOX_PATH, chroma_dir: str = CHROMA_DATA_DIR) -> int:
+def calculate_mbox_checksum(mbox_path: str) -> str:
+    """Calculate checksum of the mbox file to detect changes."""
+    hasher = hashlib.md5()
+    with open(mbox_path, "rb") as f:
+        # Read file in chunks to handle large files
+        for chunk in iter(lambda: f.read(8192), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def ingest(mbox_path: str = MBOX_PATH, chroma_dir: str = CHROMA_DATA_DIR, force: bool = False) -> dict:
+    """Ingest mbox data into ChromaDB.
+    
+    Args:
+        mbox_path: Path to the mbox file
+        chroma_dir: Path to ChromaDB data directory
+        force: If True, reindex even if data hasn't changed
+        
+    Returns:
+        dict with status information
+    """
     print(f"Parsing {mbox_path}...")
     emails = parse_mbox(mbox_path)
     print(f"  Found {len(emails)} individual messages")
@@ -151,19 +172,48 @@ def ingest(mbox_path: str = MBOX_PATH, chroma_dir: str = CHROMA_DATA_DIR) -> int
     threads = group_into_threads(emails)
     print(f"  Grouped into {len(threads)} threads")
 
+    # Calculate checksum of source data
+    source_checksum = calculate_mbox_checksum(mbox_path)
+    
+    # Check if we need to reindex
+    client = chromadb.PersistentClient(path=chroma_dir, settings=Settings(anonymized_telemetry=False))
+    
+    try:
+        existing_collection = client.get_collection(COLLECTION_NAME)
+        existing_count = existing_collection.count()
+        existing_metadata = existing_collection.metadata or {}
+        existing_checksum = existing_metadata.get("source_checksum", "")
+        
+        if not force and existing_checksum == source_checksum and existing_count == len(threads):
+            print(f"Data unchanged (checksum: {source_checksum[:8]}...). Skipping reindex.")
+            return {
+                "reindexed": False,
+                "threads_count": existing_count,
+                "message": "Data is up to date, no reindexing needed",
+                "checksum": source_checksum,
+            }
+    except Exception:
+        # Collection doesn't exist or error reading it
+        pass
+
     print(f"Loading embedding model ({EMBEDDING_MODEL})...")
     model = SentenceTransformer(EMBEDDING_MODEL)
 
     print(f"Connecting to ChromaDB at {chroma_dir}...")
-    client = chromadb.PersistentClient(path=chroma_dir, settings=Settings(anonymized_telemetry=False))
 
     # Drop and recreate collection for a clean ingest
     try:
         client.delete_collection(COLLECTION_NAME)
     except Exception:
         pass
+    
     collection = client.create_collection(
-        COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
+        COLLECTION_NAME, 
+        metadata={
+            "hnsw:space": "cosine",
+            "source_checksum": source_checksum,
+            "source_file": os.path.basename(mbox_path),
+        }
     )
 
     texts = []
@@ -202,7 +252,17 @@ def ingest(mbox_path: str = MBOX_PATH, chroma_dir: str = CHROMA_DATA_DIR) -> int
 
     collection.add(documents=texts, embeddings=embeddings, metadatas=metadatas, ids=ids)
     print(f"Done! {len(threads)} threads stored in ChromaDB.")
-    return len(threads)
+    
+    # Reset the cached collection in retriever
+    from retriever import reset_collection_cache
+    reset_collection_cache()
+    
+    return {
+        "reindexed": True,
+        "threads_count": len(threads),
+        "message": f"Successfully indexed {len(threads)} threads",
+        "checksum": source_checksum,
+    }
 
 
 if __name__ == "__main__":
