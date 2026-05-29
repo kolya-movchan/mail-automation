@@ -1,0 +1,21 @@
+{
+  "filter": [
+    {
+      "query": "from:noreply@jira.nexora.io",
+      "labelsToAdd": [
+        "Jira",
+        "Archived"
+      ],
+      "labelsToRemove": [
+        "Inbox"
+      ]
+    },
+    {
+      "query": "from:notifications@github.com",
+      "labelsToAdd": [
+        "GitHub"
+      ],
+      "labelsToRemove": []
+    }
+  ]
+}
