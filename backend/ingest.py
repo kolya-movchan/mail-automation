@@ -1,5 +1,6 @@
 """Parse .mbox file, embed each email thread, and store in ChromaDB."""
 
+import json
 import mailbox
 import os
 import re
@@ -172,6 +173,16 @@ def ingest(mbox_path: str = MBOX_PATH, chroma_dir: str = CHROMA_DATA_DIR) -> int
     for i, thread in enumerate(threads):
         text = f"Subject: {thread['subject']}\nFrom: {thread['first_sender']}\nDate: {thread['first_date']}\n\n{thread['combined_body']}"
         texts.append(text)
+        messages_payload = [
+            {
+                "sender": m["from"],
+                "date": m["date"],
+                "to": m["to"],
+                "cc": m["cc"],
+                "body": m["body"][:5000],
+            }
+            for m in thread["messages"]
+        ]
         metadatas.append(
             {
                 "thread_id": thread["thread_id"],
@@ -181,6 +192,7 @@ def ingest(mbox_path: str = MBOX_PATH, chroma_dir: str = CHROMA_DATA_DIR) -> int
                 "last_date": thread["last_date"],
                 "message_count": thread["message_count"],
                 "participants": ", ".join(thread["participants"][:5]),
+                "messages_json": json.dumps(messages_payload),
             }
         )
         ids.append(f"thread-{i}")

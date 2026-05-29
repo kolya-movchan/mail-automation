@@ -42,10 +42,12 @@ def retrieve(
     n_results: int = 5,
     min_score: float = MIN_RELEVANCE,
 ) -> list[dict]:
-    """Return thread chunks relevant to the query.
+    """Return the email thread(s) relevant to the query.
 
-    Always returns the top match (so the LLM has something to work with),
-    plus any additional matches above `min_score`.
+    May return one thread, multiple threads, or an empty list — depending on
+    how many candidates exceed `min_score`. Matches the task brief's
+    "identify and retrieve the relevant email thread(s)" requirement: the
+    system reports exactly the threads it considers relevant, no more.
     """
     model = _get_model()
     collection = _get_collection()
@@ -71,7 +73,4 @@ def retrieve(
             }
         )
 
-    if not threads:
-        return []
-    relevant = [t for t in threads if t["score"] >= min_score]
-    return relevant or threads[:1]
+    return [t for t in threads if t["score"] >= min_score]
