@@ -2,7 +2,13 @@
 
 An AI-powered Q&A system over Gmail exports. Ask natural-language questions about your email archive and get accurate answers with source references.
 
-## Quick Start
+## ✨ Live Demo
+
+**👉 [Try it here](https://mail-knowledge-base-production.up.railway.app/)** — No setup needed, just ask questions about the sample email archive.
+
+---
+
+## 🚀 Quick Start
 
 ### 1. Prerequisites
 
@@ -57,7 +63,7 @@ You can also click **"Ingest emails"** in the UI to re-run ingestion without the
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 ```
 data/sample-1.mbox
@@ -79,7 +85,7 @@ frontend/ (Next.js)        ← question input → answer card → source thread 
 
 ---
 
-## Technology Choices
+## 🔧 Technology Choices
 
 **ChromaDB** — needed vector search for semantic Q&A (not just keyword matching). Chose it because it's embedded (no Docker/server), pip-installable, and persists locally. Beats pgvector (needs Postgres), Weaviate/Qdrant (need containers), Pinecone (cloud-only). Embedding whole threads (via `X-GM-THRID` header) instead of individual messages so results are complete conversations.
 
@@ -97,7 +103,7 @@ frontend/ (Next.js)        ← question input → answer card → source thread 
 
 ---
 
-## Testing & CI/CD
+## ✅ Testing & CI/CD
 
 The brief lists automated tests and CI/CD as out of scope — both are added here as extra mile.
 
@@ -128,7 +134,7 @@ Railway is wired to auto-deploy on push to the default branch, so continuous dep
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 mail-automation/
