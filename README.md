@@ -66,13 +66,13 @@ You can also click **"Ingest emails"** in the UI to re-run ingestion without the
 ## 🏗️ Architecture
 
 ```
-data/sample-1.mbox
+backend/data/sample-1.mbox
       │
       ▼
 backend/ingest.py          ← parse mbox → group threads → embed → ChromaDB
       │
       ▼
-data/chroma/               ← persistent vector store (local)
+backend/data/chroma/       ← persistent vector store (local)
       │
       ▼
 backend/main.py (FastAPI)
@@ -145,6 +145,9 @@ mail-automation/
 │   ├── ingest.py        # mbox parsing, thread grouping, embedding, ChromaDB storage
 │   ├── retriever.py     # vector similarity retrieval
 │   ├── tests/           # pytest suite (ingest, retriever, API)
+│   ├── data/
+│   │   ├── sample-1.mbox  # Gmail Takeout export
+│   │   └── chroma/      # ChromaDB persistent storage (created by make ingest)
 │   ├── requirements.txt
 │   ├── requirements-dev.txt
 │   ├── pytest.ini
@@ -155,9 +158,6 @@ mail-automation/
 │   │   ├── page.tsx     # Main Q&A page (Client Component)
 │   │   └── layout.tsx
 │   └── package.json
-├── data/
-│   ├── sample-1.mbox      # Gmail Takeout export
-│   └── chroma/          # ChromaDB persistent storage (created by make ingest)
 ├── Makefile
 └── README.md
 ```
