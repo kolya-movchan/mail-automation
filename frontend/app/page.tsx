@@ -191,6 +191,16 @@ export default function Home() {
   return (
     <main className="min-h-screen">
       <div className="mx-auto max-w-2xl px-6 pt-10 pb-32 sm:pt-16">
+        {/* Client mark */}
+        <div className="mb-8 flex justify-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/assets/spendbase-logo.png"
+            alt="Spendbase"
+            className="h-7 w-auto opacity-90"
+          />
+        </div>
+
         {/* Running header — editorial chrome */}
         <div className="mb-14 flex items-center justify-between border-b pb-3 rule">
           <span className="smallcaps">Correspondence&nbsp;Archive · MMXXV</span>

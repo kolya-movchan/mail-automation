@@ -135,15 +135,51 @@ For task running I used Make. It's standard, no extra install, and gives reviewe
 
 ---
 
+## Testing & CI/CD
+
+The brief lists automated tests and CI/CD as out of scope — both are added here as extra mile.
+
+### Tests
+
+The backend has a pytest suite covering ingestion parsing, retrieval filtering, and every FastAPI endpoint (happy path + error paths). The LLM and vector store are stubbed so the tests are fast, deterministic, and need no network or API key.
+
+```bash
+make test
+```
+
+What's covered:
+
+- **`tests/test_ingest.py`** — mbox parsing (headers, MIME-encoded subjects, Unicode bodies, ISO date normalization), thread grouping by `X-GM-THRID`, fallback to subject-based grouping, chronological message ordering.
+- **`tests/test_retriever.py`** — cosine-similarity score filtering, the `min_score` floor, empty-result behavior. Uses a fake Chroma collection so no model download.
+- **`tests/test_api.py`** — `/health`, `/ask` (200 / 404 / 500 / 502), `/ingest` (200 / 500), source-reference shape, error surfacing from upstream LLM failures.
+
+### CI
+
+`.github/workflows/ci.yml` runs on every push and PR to `master`/`main`:
+
+- **Backend job** — installs deps with `uv`, runs the pytest suite.
+- **Frontend job** — `npm ci`, `npm run lint`, `npm run build` (the build step type-checks as well).
+
+### CD
+
+Railway is wired to auto-deploy on push to the default branch, so continuous deployment is covered there. The GitHub Actions workflow above adds the missing CI half — gating PRs on tests and lint before they land.
+
+---
+
 ## Project Structure
 
 ```
 mail-automation/
+├── .github/workflows/
+│   └── ci.yml           # Backend pytest + frontend lint/build on every PR
 ├── backend/
 │   ├── main.py          # FastAPI app — /ingest and /ask endpoints
 │   ├── ingest.py        # mbox parsing, thread grouping, embedding, ChromaDB storage
 │   ├── retriever.py     # vector similarity retrieval
+│   ├── tests/           # pytest suite (ingest, retriever, API)
 │   ├── requirements.txt
+│   ├── requirements-dev.txt
+│   ├── pytest.ini
 │   ├── .env.example
 │   └── .venv/           # Python virtual environment (created by make setup)
 ├── frontend/
