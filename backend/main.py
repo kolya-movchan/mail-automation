@@ -27,7 +27,7 @@ app.add_middleware(
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3-haiku")
-MBOX_PATH = os.getenv("MBOX_PATH", "../data/sample.mbox")
+MBOX_PATH = os.getenv("MBOX_PATH", "../data/sample-1.mbox")
 
 _llm_client: OpenAI | None = None
 

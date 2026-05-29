@@ -28,10 +28,10 @@ interface AskResponse {
 }
 
 const EXAMPLE_QUESTIONS = [
-  "What was discussed in the all-hands?",
-  "Why did the API gateway return 503s?",
-  "What's the Q1 roadmap?",
-  "Any partnership discussions?",
+  "What was decided about the CRM vendor?",
+  "Why did the Pinnacle Health API go down?",
+  "What's changing in the remote work policy?",
+  "Summarize the Q3 security audit findings.",
 ];
 
 const STOPWORDS = new Set([

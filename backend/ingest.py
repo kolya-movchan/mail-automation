@@ -17,7 +17,7 @@ from sentence_transformers import SentenceTransformer
 load_dotenv()
 
 CHROMA_DATA_DIR = os.getenv("CHROMA_DATA_DIR", "../data/chroma")
-MBOX_PATH = os.getenv("MBOX_PATH", "../data/sample.mbox")
+MBOX_PATH = os.getenv("MBOX_PATH", "../data/sample-1.mbox")
 COLLECTION_NAME = "email_threads"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 

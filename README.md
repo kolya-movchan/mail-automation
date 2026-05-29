@@ -28,7 +28,7 @@ Edit `backend/.env` and set your OpenRouter API key:
 OPENROUTER_API_KEY=sk-or-...
 OPENROUTER_MODEL=meta-llama/llama-3.1-8b-instruct   # or any OpenRouter model
 CHROMA_DATA_DIR=../data/chroma
-MBOX_PATH=../data/sample.mbox
+MBOX_PATH=../data/sample-1.mbox
 ```
 
 ### 4. Ingest emails
@@ -60,7 +60,7 @@ You can also click **"Ingest emails"** in the UI to re-run ingestion without the
 ## Architecture
 
 ```
-data/sample.mbox
+data/sample-1.mbox
       │
       ▼
 backend/ingest.py          ← parse mbox → group threads → embed → ChromaDB
@@ -81,130 +81,57 @@ frontend/ (Next.js)        ← question input → answer card → source thread 
 
 ## Technology Choices
 
-The test brief requires that every tool, library, and service is justified. This section is organized by the categories the brief calls out — **Storage**, **AI model**, **Interface** — followed by supporting choices (language, framework, parsing, packaging).
+Here's how I picked the stack for this. The brief asked me to justify every choice, so I'm walking through the main decisions and what I was thinking.
 
-### Storage
+### Storage — ChromaDB for vector search
 
-#### ChromaDB — vector database
+The whole point here is semantic Q&A over emails. Someone asks "why did the API gateway return 503s?" and the answer might be in a thread that never mentions those exact words. Keyword search (SQLite FTS, Postgres full-text, whatever) wouldn't cut it. I needed vector similarity search.
 
-**Why:** The task is semantic Q&A over email threads, where users ask things like *"why did the API gateway return 503s?"* — the relevant thread doesn't necessarily share keywords with the question. That rules out plain keyword search (SQLite FTS, Postgres FTS) and points to vector similarity. ChromaDB runs **fully embedded in-process** with a single `pip install`, persists to a local directory, and supports cosine distance via `hnsw:space: "cosine"` — exactly what a self-contained demo needs.
+ChromaDB was perfect because it's just `pip install chromadb` and it runs embedded — no separate server process, no Docker, nothing. It persists to a local directory and supports cosine distance out of the box. For a self-contained demo that needs to run on anyone's machine, that's exactly what I wanted. I looked at pgvector but that means running Postgres, which felt like overkill. Weaviate and Qdrant need Docker containers. Pinecone is cloud-only and I wanted everything local. FAISS is fast but doesn't have built-in persistence or metadata storage, so I'd have to build that myself.
 
-**Alternatives considered:**
-- **pgvector** — requires running PostgreSQL; overkill for a single-process demo.
-- **Weaviate / Qdrant** — require Docker; adds setup friction.
-- **Pinecone** — cloud-only, requires an API key and account, and stores data off-machine.
-- **FAISS** — fast but has no built-in persistence layer or metadata storage; we'd have to build the metadata sidecar ourselves.
-- **SQLite FTS5** — pure keyword search; would miss semantically related threads.
+I went with one embedding per thread instead of per message. Each thread gets grouped by Gmail's `X-GM-THRID` header (or by normalized subject line if that's missing), then all the messages in that thread get combined and embedded as one vector. Metadata like subject, sender, dates, participant list, etc. gets attached for display. That way when you search, you get back a complete conversation, not random fragments.
 
-#### Storage schema — one embedding per thread
+### Embeddings — sentence-transformers with all-MiniLM-L6-v2
 
-Each Gmail thread (not individual message) is embedded as a single vector. Messages are grouped first by `X-GM-THRID` (the authoritative Gmail thread identifier), then by normalized subject line for any messages missing that header. The combined body of all messages in the thread is what gets embedded, with metadata (subject, first sender, dates, participants, message count) attached for display in source cards. This means a single similarity match returns a complete, contextually whole conversation — not a fragment.
+For embeddings I picked `all-MiniLM-L6-v2` via the `sentence-transformers` library. It's free, runs on CPU, generates 384-dim vectors in milliseconds, and scores really well on the MTEB benchmark for its size. No API key, no rate limits, no per-query cost. Since embeddings happen at ingest time and then again for every query, keeping this local and fast mattered.
 
-### AI Model
+I thought about OpenAI's `text-embedding-3-small` — it's higher quality — but for ~50 email threads the quality gain didn't justify adding another API dependency.
 
-#### sentence-transformers + `all-MiniLM-L6-v2` — embeddings
+### LLM — OpenRouter for flexibility
 
-**Why:** Embeddings are computed once at ingest time and again per query, so cost matters. `all-MiniLM-L6-v2` is **free, runs on CPU**, produces 384-dim vectors in milliseconds, and consistently ranks among the top general-purpose English models on the [MTEB benchmark](https://huggingface.co/spaces/mteb/leaderboard) for its size. No API key, no rate limits, no cost.
+I went with OpenRouter as the LLM gateway. It's one API key, OpenAI-compatible, and proxies to basically every major provider (Anthropic, OpenAI, Google, Meta, Mistral, you name it). That meant I could use the official OpenAI Python SDK and just point `base_url` at OpenRouter. 
 
-**Alternatives considered:**
-- **OpenAI `text-embedding-3-small`** — higher quality but costs money and requires an API key; quality gain doesn't justify the dependency for ~50 threads.
-- **Cohere embeddings** — same trade-off as OpenAI.
-- **`all-mpnet-base-v2`** — higher quality but ~3× slower; not worth it at this corpus size.
+I set the default to `meta-llama/llama-3.1-8b-instruct` because it's Apache-2.0 licensed, available on OpenRouter's free tier, and it's good at reading provided context (which is what RAG needs). I didn't want to lock this to Claude or GPT because that adds vendor lock-in and costs money. LangChain and LlamaIndex felt like overkill for what's basically 30 lines of prompt-and-HTTP code.
 
-#### OpenRouter — LLM gateway
+### RAG — retrieval-augmented generation
 
-**Why:** OpenRouter is a single **OpenAI-compatible** endpoint that proxies to virtually every major model provider (Anthropic, OpenAI, Google, Meta, Mistral, etc.). One API key, one SDK (`openai` Python client pointed at OpenRouter's base URL), and the model is swappable via a single env var. This is exactly the flexibility a reviewer benefits from — they can try the system with a free open-source model without signing up for proprietary providers.
+I structured this as a classic RAG setup: embed the user's query, pull the top 5 most similar threads from ChromaDB, inject just those as context, and ask the LLM to answer from that. This scales to any archive size (you're not dumping thousands of emails into the prompt), keeps answers grounded in real data, and lets me show the same retrieved threads as source cards in the UI.
 
-The default is `meta-llama/llama-3.1-8b-instruct` — Apache-2.0-licensed, available on OpenRouter's free tier, and well-suited to grounded-answer RAG where the model must read provided context rather than rely on its own knowledge.
+I added a relevance threshold (0.30 cosine similarity) to filter out threads that were in the top 5 but aren't actually relevant. That prevents the "we returned 5 matches even though 4 were junk" problem.
 
-**Alternatives considered:**
-- **Anthropic / OpenAI / Google SDKs directly** — vendor lock-in; switching models means rewriting client code.
-- **Local LLM via Ollama** — adds significant setup (model download, separate server process); excessive for a 3-hour task.
-- **LangChain / LlamaIndex abstractions** — heavyweight framework dependencies for what is ~30 lines of HTTP-and-prompt code.
+Dumping everything into the prompt would hit token limits on bigger archives and waste money. Fine-tuning a model on the emails would be slow, expensive, and wouldn't let me cite sources. A cross-encoder reranker would improve precision but adds another model and noticeable latency; didn't feel worth it for 50 threads.
 
-#### RAG architecture (retrieval-augmented generation)
+### Frontend — Next.js + React
 
-**Why:** Stuffing all email threads directly into a single prompt would exceed context windows on larger archives and is wasteful on tokens. RAG instead embeds the query, retrieves the top-K (K=5) most similar threads from ChromaDB, and only injects those as context. This **scales to any archive size** while keeping answers grounded in actual emails (and lets us surface the same retrieved threads as source citations in the UI).
+For the UI I went with Next.js 16 (App Router) and React 19. The brief said web, CLI, or Slack were all fine, but a web UI is way easier for someone reviewing this to try out. You just open a browser. Next.js gives TypeScript, hot reload, and solid defaults right out of `create-next-app`. The whole interaction is one client component in `app/page.tsx` that posts to FastAPI. I didn't need server components, route handlers, or any of that.
 
-A relevance threshold (`MIN_RELEVANCE = 0.30` cosine similarity) filters out unrelated threads that happened to be in the top-K but aren't actually about the question — preventing the noisy "we matched 5 things even though only 1 was relevant" problem.
+For styling I used Tailwind CSS v4. Keeps styles inline with components, no separate CSS file, and the new Lightning CSS engine is instant. The color-coded relevance badges (emerald/amber/slate) were trivial to add. I skipped CSS modules (more files to juggle), shadcn/ui (nice but overkill here), and Material UI / Chakra (too opinionated for what I needed).
 
-**Alternatives considered:**
-- **Full-context injection** — works for tiny corpora but hits token limits and costs more per query.
-- **Fine-tuning a model on the archive** — slow, expensive, and the result can't cite sources.
-- **Reranking with a cross-encoder** — would improve retrieval precision but adds another model and noticeable latency; not justified at 50 threads.
+### Backend — Python + FastAPI
 
-### Interface
+Python was the obvious choice for the backend. The stdlib has `mailbox` for mbox parsing, `sentence-transformers` is Python-first, and ChromaDB's main client is Python. If I'd done this in Node I'd have to use `@xenova/transformers` (which is slower) or call out to an external embedding API. Go doesn't have the ML ecosystem. Hower, I am Node-first person 🥲
 
-#### Next.js 16 (App Router) + React 19 — web UI
+FastAPI made sense for the web framework. Two endpoints (`/ingest` and `/ask`), Pydantic request/response validation, automatic OpenAPI docs at `/docs`, and it's async-ready. Took like 10 lines to set up. Flask would've needed extra libraries for validation and docs. Django is way too heavy for two endpoints. Starlette directly is fine but FastAPI is just a thin wrapper that adds stuff I wanted anyway.
 
-**Why:** The brief allows web/CLI/Slack. A web UI is the most reviewer-friendly — no terminal-pasting, you can see the answer card and source citations side-by-side. Next.js with the App Router gives **TypeScript, hot reload, and production-ready defaults out of the box** with `create-next-app`. A single client component (`app/page.tsx`) handles the entire interaction; we don't need server actions, route handlers, or RSC for a simple "POST to FastAPI" flow.
+For mbox parsing I used Python's stdlib `mailbox` module with `email.policy.default`. The default policy (`compat32`) decodes headers as ASCII and mangles UTF-8 characters into gibberish. The `default` policy handles Unicode correctly. I looked at `mail-parser` on PyPI but it's just a wrapper around `email` and doesn't add anything I needed. Hand-rolling regex parsing for mbox files sounded like a nightmare (MIME-encoded headers, multipart bodies, charset hell).
 
-**Alternatives considered:**
-- **CLI** — fastest to build but harder for a reviewer to demo and inspect.
-- **Plain HTML + vanilla JS** — no type safety, no component model; UI iteration is slower.
-- **Vite + React** — fine choice; Next.js was picked because the App Router scaffolding is more turnkey.
-- **Streamlit / Gradio** — fast for ML demos but visually generic and hard to customize.
+Since OpenRouter is OpenAI-compatible, I just used the official OpenAI Python SDK and overrode `base_url`. No custom HTTP code, no reinventing retry logic.
 
-#### Tailwind CSS v4 — styling
+### Tooling — uv + Make
 
-**Why:** Tailwind keeps styles co-located with components, avoids a separate CSS file to maintain, and v4's Lightning CSS engine compiles instantly. The relevance-tier color coding (emerald/amber/slate score badges) is trivial to express inline.
+I went with `uv` as the Python package manager because it's 10+ faster than `pip` for this dependency set (`sentence-transformers` and `chromadb` have massive dep trees). It creates a lockable virtualenv in one command, which makes `make setup` actually fast. `poetry` would've worked but felt heavier than I needed for a demo.
 
-**Alternatives considered:**
-- **CSS modules / vanilla CSS** — more files, slower iteration.
-- **shadcn/ui** — high-quality components, but adds dependencies and is overkill for this surface area.
-- **Material UI / Chakra** — opinionated theming we'd have to override.
-
-### Supporting Choices
-
-#### Python — language
-
-**Why:** Python has the strongest ecosystem for the three things this app does: **mbox parsing** (`mailbox` is stdlib), **embeddings** (`sentence-transformers`), and **vector DBs** (ChromaDB's primary client is Python). Doing this in JS would mean shelling out to a Python process for embeddings anyway.
-
-**Alternatives considered:**
-- **Node.js** — would require `@xenova/transformers` (slower than the Python original) or an external embedding API.
-- **Go** — minimal ML library support; would force an external embeddings service.
-
-#### FastAPI — backend framework
-
-**Why:** Two endpoints (`/ingest`, `/ask`), Pydantic request/response validation, automatic OpenAPI docs at `/docs`, and async-ready — all with ~10 lines of setup. Plays well with the OpenAI client and `sentence-transformers`.
-
-**Alternatives considered:**
-- **Flask** — would need separate libraries for validation and OpenAPI docs.
-- **Django** — far too heavy for two endpoints.
-- **Starlette directly** — FastAPI is a thin wrapper that adds validation we want.
-
-#### Python `mailbox` + `email.policy.default` — mbox parsing
-
-**Why:** `mailbox` is stdlib and handles the mbox format natively. The default `compat32` policy decodes headers as ASCII (mangling UTF-8 characters like `—` into `���`), so we explicitly use **`email.policy.default`** when constructing the mailbox, which decodes headers correctly as Unicode.
-
-**Alternatives considered:**
-- **`mail-parser` (PyPI)** — wrapper around `email`; doesn't solve anything stdlib already handles.
-- **Hand-rolled regex parsing** — fragile against real-world mbox quirks (MIME-encoded headers, multipart bodies, charset variations).
-
-#### OpenAI Python SDK — LLM client
-
-**Why:** OpenRouter exposes an OpenAI-compatible API, so we can use the official `openai` SDK by just overriding `base_url`. Zero custom HTTP code.
-
-**Alternatives considered:**
-- **`httpx` directly** — would mean writing our own retry/streaming logic.
-- **LangChain `ChatOpenAI`** — pulls in a heavy framework for one chat call.
-
-#### `uv` — Python package manager
-
-**Why:** ~10–100× faster installs than `pip` for this dependency set (`sentence-transformers` and `chromadb` have large dep trees), and creates a lockable virtualenv in one command. Makes the `make setup` one-liner actually fast.
-
-**Alternatives considered:**
-- **`pip` + `venv`** — works but materially slower for first-time setup.
-- **`poetry`** — heavier; project metadata in `pyproject.toml` not needed for a demo.
-
-#### Make — task runner
-
-**Why:** Standard, no extra install, and gives reviewers a single discoverable interface (`make setup`, `make ingest`, `make backend`, `make frontend`). Satisfies the brief's "one-command setup is ideal."
-
-**Alternatives considered:**
-- **Shell scripts** — would scatter across multiple files.
-- **`just`** — nicer syntax but adds an install step.
-- **npm scripts only** — can't naturally coordinate backend + frontend.
+For task running I used Make. It's standard, no extra install, and gives reviewers a clean interface (`make setup`, `make ingest`, `make backend`, `make frontend`). The brief wanted "one-command setup" and Make delivers that. I could've written shell scripts but then they'd be scattered across files. `just` has nicer syntax but adds an install step. npm scripts alone can't coordinate backend + frontend cleanly.
 
 ---
 
@@ -225,7 +152,7 @@ mail-automation/
 │   │   └── layout.tsx
 │   └── package.json
 ├── data/
-│   ├── sample.mbox      # Gmail Takeout export
+│   ├── sample-1.mbox      # Gmail Takeout export
 │   └── chroma/          # ChromaDB persistent storage (created by make ingest)
 ├── Makefile
 └── README.md
