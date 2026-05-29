@@ -4,9 +4,6 @@ backend/__pycache__/
 backend/*.pyc
 backend/.env
 
-# ChromaDB data (generated, not committed)
-data/chroma/
-
 # Next.js
 frontend/.next/
 frontend/node_modules/
